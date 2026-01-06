@@ -97,15 +97,36 @@ def main():
 
         logger.info("Scan Cycle Complete.")
 
-    # Schedule the scan (e.g., every 5 minutes)
+    # Run Scan Logic in a separate thread sc that Flask can run in main thread (or vice versa)
+    import threading
+    
+    # Schedule the scan
     schedule.every(5).minutes.do(run_scan)
     
-    # Run once immediately for testing
-    run_scan()
+    # Run once immediately
+    threading.Thread(target=run_scan).start()
 
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    def run_scheduler():
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+
+    # Start Scheduler in Background Thread
+    threading.Thread(target=run_scheduler, daemon=True).start()
+
+    # --- Keep-Alive Web Server (for Render/Heroku) ---
+    from flask import Flask
+    app = Flask(__name__)
+
+    @app.route('/')
+    def health_check():
+        return "REP Bot is Running!"
+
+    # Get Port from Environment (Render sets this)
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Starting Web Server on port {port}")
+    app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
     main()
