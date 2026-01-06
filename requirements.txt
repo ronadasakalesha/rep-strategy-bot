@@ -1,0 +1,6 @@
+SmartApi-python
+pandas
+pandas_ta
+python-dotenv
+logzero
+schedule

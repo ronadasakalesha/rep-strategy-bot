@@ -1,0 +1,19 @@
+# Secrets
+.env
+env/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+logs.txt
+
+# Cache
+fno_tokens.json
+
+# IDE
+.vscode/
+.idea/
