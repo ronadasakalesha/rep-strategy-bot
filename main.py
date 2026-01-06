@@ -4,6 +4,8 @@ from logzero import logger
 import config
 from datetime import datetime
 from notifier import TelegramNotifier
+from smart_api_helper import SmartApiHelper
+from strategy_rep import REPStrategy
 
 def main():
     logger.info("Initializing REP Strategy Bot...")
