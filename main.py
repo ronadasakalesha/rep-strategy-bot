@@ -22,7 +22,32 @@ def main():
     # 3. Initialize Notifier
     notifier = TelegramNotifier()
 
+    def is_market_open():
+        now = datetime.now()
+        # IST is UTC+5:30. Ensure server time is handled or assume strict time checks if running local/cloud with timezone set.
+        # Ideally handle timezone explicitly.
+        # For simplicity, assuming system time is IST or converting.
+        # Render/Heroku are UTC. We must convert to IST.
+        from datetime import timedelta, timezone
+        
+        utc_now = datetime.now(timezone.utc)
+        ist_now = utc_now + timedelta(hours=5, minutes=30)
+        
+        current_time = ist_now.time()
+        start_time = datetime.strptime("09:15", "%H:%M").time()
+        end_time = datetime.strptime("15:30", "%H:%M").time()
+        
+        # Check if Weekend
+        if ist_now.weekday() >= 5: # 5=Sat, 6=Sun
+            return False
+            
+        return start_time <= current_time <= end_time
+
     def run_scan():
+        if not is_market_open():
+            logger.info("Market Closed. Sleeping...")
+            return
+
         logger.info(f"Starting Scan Cycle for {len(config.SYMBOLS)} Symbols...")
         
         for item in config.SYMBOLS:
