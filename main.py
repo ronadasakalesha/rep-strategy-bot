@@ -45,7 +45,29 @@ def main():
             
         return start_time <= current_time <= end_time
 
+    # Lazy Load Tokens
+    from token_loader import TokenLoader
+    
+    def load_tokens():
+        logger.info("Loading FNO Tokens...")
+        try:
+            loader = TokenLoader()
+            tokens = loader.get_fno_equity_list()
+            # Add Indices
+            if not any(s['symbol'] == 'NIFTY' for s in tokens):
+                tokens.append({"symbol": "NIFTY", "token": "99926000", "exchange": "NSE"})
+            if not any(s['symbol'] == 'BANKNIFTY' for s in tokens):
+                tokens.append({"symbol": "BANKNIFTY", "token": "99926009", "exchange": "NSE"})
+            config.SYMBOLS = tokens
+            logger.info(f"Loaded {len(config.SYMBOLS)} Symbols.")
+        except Exception as e:
+            logger.error(f"Failed to load tokens: {e}")
+
     def run_scan():
+        # Ensure tokens are loaded
+        if not config.SYMBOLS:
+            load_tokens()
+
         if not is_market_open():
             logger.info("Market Closed. Sleeping...")
             return

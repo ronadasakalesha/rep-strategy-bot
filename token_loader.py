@@ -66,13 +66,13 @@ class TokenLoader:
                         "exchange": "NSE"
                     })
         
-        # 3. Save to cache
+        # 3. Save to cache (Handle Read-Only Filesystems like Render free tier basic)
         try:
             with open(self.cache_file, 'w') as f:
                 json.dump(fno_equity_tokens, f, indent=4)
             logger.info(f"Saved {len(fno_equity_tokens)} tokens to {self.cache_file}")
         except Exception as e:
-            logger.error(f"Error saving cache: {e}")
+            logger.warning(f"Could not save cache (expected on Read-Only FS): {e}")
             
         return fno_equity_tokens
 
