@@ -7,3 +7,4 @@ schedule
 flask
 gunicorn
 websocket-client
+pyotp
