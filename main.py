@@ -73,12 +73,36 @@ def main():
         except Exception as e:
             logger.error(f"Failed to load tokens: {e}")
 
+    # State for Market Status Tracking
+    bot_state = {"last_status": None}
+
     def run_scan():
         # Ensure tokens are loaded
         if not config.SYMBOLS:
             load_tokens()
 
-        if not is_market_open():
+        current_status = is_market_open()
+
+        # Check for Status Change
+        if bot_state["last_status"] is not None:
+             if current_status and not bot_state["last_status"]:
+                 msg = f"🟢 **Market Opened**\nBot is now scanning {len(config.SYMBOLS)} tokens."
+                 try:
+                     notifier.send_alert(msg)
+                 except Exception as e:
+                     logger.error(f"Failed to send Open Alert: {e}")
+             
+             elif not current_status and bot_state["last_status"]:
+                 msg = f"🔴 **Market Closed**\nBot is sleeping until next session."
+                 try:
+                     notifier.send_alert(msg)
+                 except Exception as e:
+                     logger.error(f"Failed to send Close Alert: {e}")
+
+        # Update State
+        bot_state["last_status"] = current_status
+
+        if not current_status:
             logger.info("Market Closed. Sleeping...")
             return
 
