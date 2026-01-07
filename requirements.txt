@@ -8,3 +8,4 @@ flask
 gunicorn
 websocket-client
 pyotp
+requests

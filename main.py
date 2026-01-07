@@ -23,9 +23,12 @@ def main():
     
     # 3. Initialize Notifier
     notifier = TelegramNotifier()
+    try:
+        notifier.send_alert("🚀 REP Strategy Bot Started on Render/Server")
+    except Exception as e:
+        logger.error(f"Startup Alert Failed: {e}")
 
     def is_market_open():
-        now = datetime.now()
         # IST is UTC+5:30. Ensure server time is handled or assume strict time checks if running local/cloud with timezone set.
         # Ideally handle timezone explicitly.
         # For simplicity, assuming system time is IST or converting.
@@ -39,11 +42,18 @@ def main():
         start_time = datetime.strptime("09:15", "%H:%M").time()
         end_time = datetime.strptime("15:30", "%H:%M").time()
         
+        logger.info(f"Checking Market Open. UTC: {utc_now.strftime('%H:%M')}, IST: {ist_now.strftime('%H:%M')} | Weekday: {ist_now.weekday()}")
+
         # Check if Weekend
         if ist_now.weekday() >= 5: # 5=Sat, 6=Sun
+            logger.info("Market Closed (Weekend)")
             return False
             
-        return start_time <= current_time <= end_time
+        is_open = start_time <= current_time <= end_time
+        if not is_open:
+            logger.info(f"Market Closed (Time {current_time} outside {start_time}-{end_time})")
+        
+        return is_open
 
     # Lazy Load Tokens
     from token_loader import TokenLoader

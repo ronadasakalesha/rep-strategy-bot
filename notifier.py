@@ -22,11 +22,11 @@ class TelegramNotifier:
         try:
             response = requests.post(url, json=payload)
             if response.status_code == 200:
-                logger.info("Telegram Alert Sent Successfully.")
+                logger.info(f"Telegram Alert Sent Successfully. Response: {response.text}")
             else:
-                logger.error(f"Failed to send alert: {response.text}")
+                logger.error(f"Failed to send alert: {response.status_code} - {response.text}")
         except Exception as e:
-            logger.error(f"Telegram Exception: {e}")
+            logger.error(f"Telegram Exception during request: {e}", exc_info=True)
 
     def format_rep_signal(self, symbol, time, price, child_rsi, p1_rsi, p2_rsi):
         msg = f"*🔥 REP Strategy Signal 🔥*\n\n"
