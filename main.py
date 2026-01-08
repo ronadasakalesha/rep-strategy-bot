@@ -122,22 +122,30 @@ def main():
                 parent1_df = helper.get_historical_data(token, exchange, config.TF_PARENT_1)
                 
                 # Check Parent 1 first to save API calls if invalid? 
-                # Optimization: Yes. If Parent 1 (Hourly) is not > 60, don't fetch others.
+                # Optimization: If Parent 1 (Hourly) is not > 60 AND not < 40, don't fetch others.
                 if parent1_df is None: continue
                 
                 parent1_df = strategy.calculate_rsi(parent1_df)
-                if parent1_df['rsi'].iloc[-1] <= config.RSI_PARENT_THRESHOLD:
-                    # logger.debug(f"{symbol}: Skipped (Parent 1 RSI {parent1_df['rsi'].iloc[-1]:.2f} <= 60)")
-                    continue
-
+                p1_rsi = parent1_df['rsi'].iloc[-1]
+                
+                # If neither LONG candidate nor SHORT candidate, skip
+                if not (p1_rsi >= config.RSI_PARENT_THRESHOLD or p1_rsi <= config.RSI_PARENT_SHORT_THRESHOLD):
+                     # logger.debug(f"{symbol}: Skipped (Parent 1 RSI {p1_rsi:.2f} neutral)")
+                     continue
+                
                 time.sleep(0.2)
                 parent2_df = helper.get_historical_data(token, exchange, config.TF_PARENT_2)
                 if parent2_df is None: continue
                 
                 parent2_df = strategy.calculate_rsi(parent2_df)
-                if parent2_df['rsi'].iloc[-1] <= config.RSI_PARENT_THRESHOLD:
-                     # logger.debug(f"{symbol}: Skipped (Parent 2 RSI <= 60)")
-                     continue
+                p2_rsi = parent2_df['rsi'].iloc[-1]
+                
+                # Check consistency
+                # If p1 was LONG (>60), p2 must be >60. If p1 was SHORT (<40), p2 must be <40.
+                if p1_rsi >= config.RSI_PARENT_THRESHOLD and p2_rsi < config.RSI_PARENT_THRESHOLD:
+                     continue # Mixed signals
+                if p1_rsi <= config.RSI_PARENT_SHORT_THRESHOLD and p2_rsi > config.RSI_PARENT_SHORT_THRESHOLD:
+                     continue # Mixed signals
                 
                 time.sleep(0.2)
                 child_df = helper.get_historical_data(token, exchange, config.TF_CHILD)
@@ -145,33 +153,66 @@ def main():
                 child_df = strategy.calculate_rsi(child_df)
 
                 # Check Conditions
-                parents_ok, parents_msg = strategy.check_parent_conditions(
-                    parent1_df, parent2_df, threshold=config.RSI_PARENT_THRESHOLD
+                parents_ok, parents_msg, mode = strategy.check_parent_conditions(
+                    parent1_df, parent2_df, 
+                    threshold_long=config.RSI_PARENT_THRESHOLD,
+                    threshold_short=config.RSI_PARENT_SHORT_THRESHOLD
                 )
                 
-                if parents_ok:
+                # --- Early Warning / Approaching Zone Check ---
+                # Check using 15M (Parent 2) context as per user request
+                warning_triggered, warning_msg = strategy.check_early_warning(child_df, parent2_df)
+                
+                if warning_triggered:
+                    # Key: "NIFTY 50_WARN"
+                    warn_key = f"{symbol}_WARN"
+                    last_warn = bot_state.get("alerts", {}).get(warn_key, 0)
+                    
+                    # Alert every 15 minutes max for warnings
+                    if time.time() - last_warn > 900: 
+                        notifier.send_alert(f"{warning_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
+                        if "alerts" not in bot_state: bot_state["alerts"] = {}
+                        bot_state["alerts"][warn_key] = time.time()
+
+                # --- Exit Alert Check ---
+                exit_triggered, exit_msg = strategy.check_exit_condition(child_df, parent2_df)
+                
+                if exit_triggered:
+                    exit_key = f"{symbol}_EXIT"
+                    last_exit = bot_state.get("alerts", {}).get(exit_key, 0)
+                    
+                    # Alert every 15 mins (or maybe more frequent? kept 15m for safety)
+                    if time.time() - last_exit > 900:
+                         notifier.send_alert(f"{exit_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
+                         if "alerts" not in bot_state: bot_state["alerts"] = {}
+                         bot_state["alerts"][exit_key] = time.time()
+
+                if parents_ok and mode:
                     child_ok, child_msg, confirmation_candle = strategy.check_child_condition(
                         child_df, 
+                        mode=mode,
                         support_low=config.RSI_CHILD_SUPPORT_LOW, 
-                        support_high=config.RSI_CHILD_SUPPORT_HIGH
+                        support_high=config.RSI_CHILD_SUPPORT_HIGH,
+                        resist_low=config.RSI_CHILD_RESISTANCE_LOW,
+                        resist_high=config.RSI_CHILD_RESISTANCE_HIGH
                     )
                     
                     if child_ok:
-                        logger.info(f"*** SIGNAL FOUND for {symbol} ***")
+                        logger.info(f"*** {mode} SIGNAL FOUND for {symbol} ***")
                         # Send Telegram Alert
                         rsi_5m = child_df['rsi'].iloc[-1]
                         rsi_1h = parent1_df['rsi'].iloc[-1]
                         rsi_15m = parent2_df['rsi'].iloc[-1]
-                        entry_price = confirmation_candle['high']
                         
-                        msg = notifier.format_rep_signal(
-                            symbol, 
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            entry_price,
-                            rsi_5m,
-                            rsi_1h,
-                            rsi_15m
-                        )
+                        entry_price = confirmation_candle['low'] if mode == "SHORT" else confirmation_candle['high'] 
+                        # Use Low for Short entry break? Or just Close? 
+                        # Usually entry is on close or break of low. 
+                        # For now, let's just log the Close/Trigger Price.
+                        # Actually logic says "TAKE A SHORT TRADE", usually at close.
+                        trigger_price = confirmation_candle['close']
+                        
+                        msg = f"🚀 **REP {mode} SIGNAL**\nSymbol: {symbol}\nPrice: {trigger_price}\nRSI(5m): {rsi_5m:.2f}\nRSI(1h): {rsi_1h:.2f}\nRSI(15m): {rsi_15m:.2f}\nTime: {datetime.now().strftime('%H:%M:%S')}"
+                        
                         notifier.send_alert(msg)
             
             except Exception as e:

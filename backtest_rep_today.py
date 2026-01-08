@@ -39,28 +39,44 @@ def main():
     # Define Date for "Today" (Assuming script is run on the same day or we iterate all data fetched)
     # We will fetch last 5 days but only scan the last day's 5m candles.
     
-    for i, item in enumerate(tokens):
+    # Create a wrapper function for processing one stock
+    def process_stock(item):
         symbol = item['symbol']
         token = item['token']
         exchange = item['exchange']
+        local_signals = []
         
-        try:
-            # logger.info(f"Scanning {symbol} ({i+1}/{len(tokens)})...")
-            
-            # Rate Limit Protection
-            time.sleep(0.2) 
+        # Helper for retrying
+        def fetch_with_retry(t, e, tf, d):
+            for attempt in range(3):
+                res = helper.get_historical_data(t, e, tf, duration_days=d)
+                if res is not None:
+                     return res
+                # If None, it might be No Data or Error. get_historical_data currently logs error.
+                # If it was a rate limit error (which we can't easily distinguish from None without changing helper), we wait.
+                # Assuming helper returns None on error.
+                time.sleep(0.5 * (attempt + 1))
+            return None
 
+        try:
             # Fetch Data for 3 Timeframes
-            # We fetch a bit more history to ensure RSI is stable
-            parent1_df = helper.get_historical_data(token, exchange, config.TF_PARENT_1, duration_days=10) # 1 Hour
-            parent2_df = helper.get_historical_data(token, exchange, config.TF_PARENT_2, duration_days=10) # 15 Min
-            child_df = helper.get_historical_data(token, exchange, config.TF_CHILD, duration_days=5)     # 5 Min
+            # NOTE: Removed Fail-Fast optimization because checking EOD RSI filters out valid morning trades.
+            parent1_df = fetch_with_retry(token, exchange, config.TF_PARENT_1, 10) 
+            parent2_df = fetch_with_retry(token, exchange, config.TF_PARENT_2, 10) 
+            child_df = fetch_with_retry(token, exchange, config.TF_CHILD, 5)     
             
             if parent1_df is None or parent2_df is None or child_df is None:
-                continue
+                return []
                 
             # Calculate RSI
             parent1_df = strategy.calculate_rsi(parent1_df)
+            parent2_df = strategy.calculate_rsi(parent2_df)
+            child_df = strategy.calculate_rsi(child_df)
+            
+            if parent2_df is None or child_df is None:
+                return []
+                
+            # Calculate RSI for others
             parent2_df = strategy.calculate_rsi(parent2_df)
             child_df = strategy.calculate_rsi(child_df)
             
@@ -70,19 +86,14 @@ def main():
             child_df.dropna(subset=['rsi'], inplace=True)
 
             # --- Multi-Timeframe Alignment (Merge AsOf) ---
-            # Pre-processing for merge
-            # Ensure index is datetime or we have a datetime column
-            # SmartApiHelper usually sets index as datetime 'date'
-            
-            # Reset index to columns for merging if needed, or ensure they are sorted datetime
             if parent1_df.index.name == 'date': parent1_df = parent1_df.reset_index()
             if parent2_df.index.name == 'date': parent2_df = parent2_df.reset_index()
             if child_df.index.name == 'date': child_df = child_df.reset_index()
             
-            # Rename columns to avoid collision
+            # Rename columns
             p1_subset = parent1_df[['date', 'rsi']].rename(columns={'rsi': 'rsi_1h'})
             p2_subset = parent2_df[['date', 'rsi']].rename(columns={'rsi': 'rsi_15m'})
-            c_subset = child_df.copy() # Keep all cols for child
+            c_subset = child_df.copy()
             c_subset.rename(columns={'rsi': 'rsi_5m'}, inplace=True)
 
             # Sort
@@ -90,73 +101,35 @@ def main():
             p2_subset.sort_values('date', inplace=True)
             c_subset.sort_values('date', inplace=True)
 
-            # Merge 15m to 5m
-            # direction='backward' matches the last available 15m candle at or before the 5m candle time
+            # Merge
             merged_df = pd.merge_asof(c_subset, p2_subset, on='date', direction='backward', tolerance=pd.Timedelta('15min'))
-            
-            # Merge 1h to Result
             merged_df = pd.merge_asof(merged_df, p1_subset, on='date', direction='backward', tolerance=pd.Timedelta('60min'))
 
-            # Filter for "Today" (Latest Date in the data)
-            if merged_df.empty: continue
+            if merged_df.empty: return []
+            
+            if merged_df.empty: return []
             
             last_date = merged_df['date'].max().date()
-            today_df = merged_df[merged_df['date'].dt.date == last_date].copy()
             
-            # DEBUG
-            logger.info(f"{symbol}: Last Date {last_date}, Rows {len(today_df)}")
+            # Find start index for today
+            today_mask = merged_df['date'].dt.date == last_date
+            if not today_mask.any(): return []
             
-            if today_df.empty: continue
-
+            start_today_idx = today_mask.idxmax()
+            
             # --- Scan Logic ---
-            # We iterate through today's 5m candles to find signals
-            # Using Strategy Logic:
-            # 1. Parent RSI > 60 (from merged cols)
-            # 2. Child RSI Dip (38-40)
-            # 3. Green Candle Confirmation
-            
-            # To detect "Dip", we need to look at sequence. 
-            # But the strategy class `check_child_condition` looks at a window (tail 5).
-            # Here in backtest, we iterate candle by candle.
-            
-            # We will use a sliding window approach or just simple state machine?
-            # Or simpler: reuse `check_child_condition`?
-            # `check_child_condition` takes a DF and checks the *end* of it.
-            # So if we feed it `today_df.iloc[:i+1]` it might work but is slow (O(N^2)).
-            
-            # Let's iterate linearly.
-            
-            # State for Setup
-            # We need to find: 
-            # 1. Parents were valid at time T (or T-k)
-            # 2. 5M RSI dipped into zone (38-40)
-            # 3. 5M Candle turns Green
-            
-            # Note: The strategy `check_child_condition` looks for a dip in the last 5 candles.
-            
-            for idx in range(1, len(today_df)):
-                row = today_df.iloc[idx]
+            # Iterate only through today's candles, but use merged_df (full history) for lookback
+            for idx in range(start_today_idx, len(merged_df)):
+                row = merged_df.iloc[idx]
                 
-                # Check Parents
                 if pd.isna(row['rsi_1h']) or pd.isna(row['rsi_15m']):
                     continue
-                    
+                
+                # --- LONG CHECK ---
                 if row['rsi_1h'] > config.RSI_PARENT_THRESHOLD and row['rsi_15m'] > config.RSI_PARENT_THRESHOLD:
-                    # Parents OK.
-                    
-                    # Check Child Setup (Dip + Green)
-                    # We look at the current candle and previous few to see if there was a dip.
-                    
-                    # Current candle must be Green for entry
-                    if row['close'] > row['open']:
-                        # Check if any of the last few candles (including this one or prev ones) 
-                        # had RSI in 38-40
-                        
-                        # Look back window of 5 candles
+                    if row['close'] > row['open']: # Green Candle
                         start_idx = max(0, idx - 5)
-                        window = today_df.iloc[start_idx : idx + 1]
-                        
-                        # Check for dip
+                        window = merged_df.iloc[start_idx : idx + 1]
                         dip_found = False
                         for w_idx in range(len(window)):
                              r_val = window.iloc[w_idx]['rsi_5m']
@@ -165,35 +138,62 @@ def main():
                                  break
                         
                         if dip_found:
-                             # Signal!
-                             # We should handle duplicates (e.g. multiple signals in same move).
-                             # For now, just log all valid triggers.
-                             
                              signal_time = row['date']
                              price = row['close']
-                             
-                             logger.info(f"SIGNAL: {symbol} at {signal_time} | Price: {price} | RSIs: 1H={row['rsi_1h']:.1f} 15M={row['rsi_15m']:.1f} 5M={row['rsi_5m']:.1f}")
-                             
-                             signals_list.append({
-                                 "symbol": symbol,
-                                 "time": signal_time,
-                                 "price": price,
-                                 "rsi_1h": row['rsi_1h'],
-                                 "rsi_15m": row['rsi_15m'],
-                                 "rsi_5m": row['rsi_5m']
+                             local_signals.append({
+                                 "symbol": symbol, "type": "LONG", "time": signal_time, "price": price,
+                                 "rsi_1h": row['rsi_1h'], "rsi_15m": row['rsi_15m'], "rsi_5m": row['rsi_5m']
                              })
+
+                # --- SHORT CHECK ---
+                elif row['rsi_1h'] < config.RSI_PARENT_SHORT_THRESHOLD and row['rsi_15m'] < config.RSI_PARENT_SHORT_THRESHOLD:
+                    if row['close'] < row['open']: # Red Candle
+                        if row['rsi_5m'] < 60: 
+                             start_idx = max(0, idx - 5)
+                             window = merged_df.iloc[start_idx : idx + 1]
+                             rally_found = False
+                             if window['rsi_5m'].max() > 60:
+                                 rally_found = True
                              
-                             # Skip next few candles to avoid duplicate alerts for same setup?
-                             # Or just let it be.
-                             
+                             if rally_found:
+                                 signal_time = row['date']
+                                 price = row['close']
+                                 local_signals.append({
+                                     "symbol": symbol, "type": "SHORT", "time": signal_time, "price": price,
+                                     "rsi_1h": row['rsi_1h'], "rsi_15m": row['rsi_15m'], "rsi_5m": row['rsi_5m']
+                                 })
+            return local_signals
+
         except Exception as e:
-            logger.error(f"Error processing {symbol}: {e}")
+            # logger.error(f"Error processing {symbol}: {e}")
+            return []
+
+    # --- Scope: NIFTY 50 INDEX ONLY ---
+    # User strictly requested to track only the Nifty 50 Index.
+    tokens = [
+        {"symbol": "NIFTY 50", "token": "99926000", "exchange": "NSE"}
+    ]
+    logger.info(f"Starting Scan for NIFTY 50 INDEX (Token: 99926000)...")
+    
+    signals_list = []
+
+    # Process sequentially (It's just one item)
+    for item in tokens:
+        res = process_stock(item)
+        if res:
+            signals_list.extend(res)
 
     logger.info("========================================")
     logger.info(f"Total Signals Generated: {len(signals_list)}")
-    logger.info("========================================")
+    
+    if not signals_list:
+        logger.info("No Signals Found for NIFTY 50 Today.")
+    
     for s in signals_list:
-        print(f"{s['symbol']} - {s['time']} - {s['price']}")
+        print(f"{s['type']} - {s['symbol']} - {s['time']}")
+        logger.info(f"{s['type']} SIGNAL: {s['symbol']} at {s['time']} | Price: {s['price']}")
+
+    logger.info("========================================")
 
 if __name__ == "__main__":
     main()

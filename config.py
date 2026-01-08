@@ -15,9 +15,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Strategy Parameters
 RSI_PERIOD = 14
-RSI_PARENT_THRESHOLD = 60  # Minimum RSI for Parent timeframes
+RSI_PARENT_THRESHOLD = 60  # Minimum RSI for Parent timeframes (LONG)
+RSI_PARENT_SHORT_THRESHOLD = 40 # Maximum RSI for Parent timeframes (SHORT)
 RSI_CHILD_SUPPORT_LOW = 38
 RSI_CHILD_SUPPORT_HIGH = 40
+RSI_CHILD_RESISTANCE_LOW = 60
+RSI_CHILD_RESISTANCE_HIGH = 62
 
 # Timeframes (Angel One format)
 # "ONE_DAY", "ONE_HOUR", "FIFTEEN_MINUTE", "FIVE_MINUTE"

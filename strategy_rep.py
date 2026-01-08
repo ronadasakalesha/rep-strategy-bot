@@ -12,59 +12,95 @@ class REPStrategy:
         df['rsi'] = ta.rsi(df['close'], length=self.rsi_period)
         return df
 
-    def check_parent_conditions(self, parent1_df, parent2_df, threshold=60):
+    def check_parent_conditions(self, parent1_df, parent2_df, threshold_long=60, threshold_short=40, lookback=10):
         """
-        Checks if RSI is above threshold (60) for both parent timeframes.
+        Checks parent timeframes.
+        Logic: 
+        - Parent 1 (1H): STRICT. Current RSI must be > threshold_long or < threshold_short.
+        - Parent 2 (15M): RECENT. Look back 'lookback' candles.
+        Returns: (bool, str, mode)
         """
         if parent1_df is None or parent2_df is None:
-            return False, "Data Missing"
-
-        rsi1 = parent1_df['rsi'].iloc[-1]
-        rsi2 = parent2_df['rsi'].iloc[-1]
-
-        if rsi1 > threshold and rsi2 > threshold:
-            return True, f"Parents Bullish (RSI1: {rsi1:.2f}, RSI2: {rsi2:.2f})"
-        else:
-            return False, f"Parents Failed (RSI1: {rsi1:.2f}, RSI2: {rsi2:.2f})"
-
-    def check_child_condition(self, child_df, support_low=38, support_high=40):
-        """
-        Checks if Child RSI dipped into 38-40 zone and we have a GREEN confirmation candle.
-        """
-        if child_df is None:
             return False, "Data Missing", None
 
-        # Look at the last few candles to find a dip into the zone
-        last_candles = child_df.tail(5) 
+        # 1. Check Parent 1 (1H) - STRICT (Current Candle)
+        p1_rsi = parent1_df['rsi'].iloc[-1]
+        p1_mode = "NEUTRAL"
+        if p1_rsi > threshold_long:
+            p1_mode = "LONG"
+        elif p1_rsi < threshold_short:
+            p1_mode = "SHORT"
         
-        confirmation_candle = None
-        rsi_dip_found = False
+        if p1_mode == "NEUTRAL":
+             return False, f"Parent 1 (1H) Neutral (RSI: {p1_rsi:.2f})", None
 
-        for i in range(len(last_candles) - 1): # Iterate up to the second to last candle
-            rsi_val = last_candles['rsi'].iloc[i]
-            if support_low <= rsi_val <= support_high:
-                 rsi_dip_found = True
-                 # Check if the NEXT candle (or current one) is green
-                 # We look for a green candle occurring AFTER or DURING the dip
-                 potential_conf_idx = i + 1
-                 if potential_conf_idx < len(last_candles):
-                     close = last_candles['close'].iloc[potential_conf_idx]
-                     open_ = last_candles['open'].iloc[potential_conf_idx]
-                     if close > open_:
-                         confirmation_candle = last_candles.iloc[potential_conf_idx]
-                         break
-        
-        # Also check just the very last completed candle for live trading
-        current_rsi = child_df['rsi'].iloc[-1]
-        current_close = child_df['close'].iloc[-1]
-        current_open = child_df['open'].iloc[-1]
-        
-        if support_low <= current_rsi <= support_high:
-             if current_close > current_open:
-                 confirmation_candle = child_df.iloc[-1]
-                 return True, f"Child Setup Found: RSI {current_rsi:.2f} in Zone & Green Candle", confirmation_candle
+        # 2. Check Parent 2 (15M) - RELAXED (Recent Lookback)
+        # Helper to find trend in recent history
+        def get_trend_recent(df, t_long, t_short, lb):
+            subset = df.tail(lb)
+            for i in range(len(subset) - 1, -1, -1):
+                rsi = subset['rsi'].iloc[i]
+                if rsi > t_long:
+                    return "LONG"
+                if rsi < t_short:
+                    return "SHORT"
+            return "NEUTRAL"
 
-        if confirmation_candle is not None:
-             return True, "Child Setup Found (Recent): RSI Dip & Green Candle", confirmation_candle
+        p2_mode = get_trend_recent(parent2_df, threshold_long, threshold_short, lookback)
+
+        # 3. Validation: Both must agree
+        if p1_mode == "LONG" and p2_mode == "LONG":
+            return True, f"Parents Bullish (P1 Strict, P2 Recent)", "LONG"
+        
+        if p1_mode == "SHORT" and p2_mode == "SHORT":
+            return True, f"Parents Bearish (P1 Strict, P2 Recent)", "SHORT"
+
+        return False, f"Parents Mismatch (P1:{p1_mode}, P2:{p2_mode})", None
+
+    def check_child_condition(self, child_df, mode, support_low=38, support_high=40, resist_low=60, resist_high=62):
+        """
+            # We iterate to find the cross
+            for i in range(len(last_candles) - 1):
+                prev_rsi = last_candles['rsi'].iloc[i]
+                # Check if this candle or previous ones were > 60.
+                # Actually, simpler: Look for a transition from > 60 to < 60.
+                
+                # If we just check if ANY candle > 60 recently, and NOW/Recently we are < 60.
+                if prev_rsi > 60:
+                     # Now look for a cross down in subsequent candles
+                     for j in range(i + 1, len(last_candles)):
+                         curr_rsi = last_candles['rsi'].iloc[j]
+                         if curr_rsi < 60:
+                             # CROSS DOWN HAPPENED at index j
+                             # Check for Red Candle at index j? User didn't explicitly demand Red, but it's safe.
+                             # User: "come down below 60... take a short trade"
+                             cand = last_candles.iloc[j]
+                             if cand['close'] < cand['open']: # Red candle confirmation
+                                  return True, f"Child SHORT Setup: RSI Cross Below 60 & Red Candle", cand
             
-        return False, f"Child No Setup (Current RSI: {child_df['rsi'].iloc[-1]:.2f})", None
+            # Additional check: Maybe the cross just happened at the very last candle? 
+            # (Covered by loop if loop covers -1, which tail(6) does).
+        
+        return False, f"Child No Setup ({mode})", None
+
+    def check_exit_condition(self, child_df, parent_df):
+        """
+        Checks for Exit Alerts.
+        Buy Exit: 15M > 60 AND 5M touches 60.
+        Sell Exit: 15M < 40 AND 5M touches 40.
+        """
+        if child_df is None or parent_df is None:
+            return False, None
+            
+        current_5m_rsi = child_df['rsi'].iloc[-1]
+        current_15m_rsi = parent_df['rsi'].iloc[-1]
+        
+        # Buy Exit (Both High)
+        if current_15m_rsi > 60 and current_5m_rsi >= 60:
+             return True, f"🚨 **Buy Exit Alert**: 5M RSI ({current_5m_rsi:.2f}) touched 60 while 15M > 60"
+
+        # Sell Exit (Both Low)
+        if current_15m_rsi < 40 and current_5m_rsi <= 40:
+             return True, f"🚨 **Sell Exit Alert**: 5M RSI ({current_5m_rsi:.2f}) touched 40 while 15M < 40"
+             
+        return False, None
