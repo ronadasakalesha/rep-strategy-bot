@@ -59,29 +59,77 @@ class REPStrategy:
 
     def check_child_condition(self, child_df, mode, support_low=38, support_high=40, resist_low=60, resist_high=62):
         """
-            # We iterate to find the cross
-            for i in range(len(last_candles) - 1):
-                prev_rsi = last_candles['rsi'].iloc[i]
-                # Check if this candle or previous ones were > 60.
-                # Actually, simpler: Look for a transition from > 60 to < 60.
-                
-                # If we just check if ANY candle > 60 recently, and NOW/Recently we are < 60.
-                if prev_rsi > 60:
-                     # Now look for a cross down in subsequent candles
-                     for j in range(i + 1, len(last_candles)):
-                         curr_rsi = last_candles['rsi'].iloc[j]
-                         if curr_rsi < 60:
-                             # CROSS DOWN HAPPENED at index j
-                             # Check for Red Candle at index j? User didn't explicitly demand Red, but it's safe.
-                             # User: "come down below 60... take a short trade"
-                             cand = last_candles.iloc[j]
-                             if cand['close'] < cand['open']: # Red candle confirmation
-                                  return True, f"Child SHORT Setup: RSI Cross Below 60 & Red Candle", cand
-            
-            # Additional check: Maybe the cross just happened at the very last candle? 
-            # (Covered by loop if loop covers -1, which tail(6) does).
+        Checks 5M Entry Triggers based on Mode.
+        LONG: RSI Dip 38-40 + Green Candle
+        SHORT: RSI Rally > 60 + Cross Below 60 + Red Candle
+        """
+        if child_df is None or mode is None:
+            return False, "Data Missing or No Mode", None
         
-        return False, f"Child No Setup ({mode})", None
+        current_close = child_df['close'].iloc[-1]
+        current_open = child_df['open'].iloc[-1]
+        current_rsi = child_df['rsi'].iloc[-1]
+
+        # 1. LONG SETUP
+        if mode == "LONG":
+            # Logic: Check last ~6 candles for a dip into 38-40
+            last_candles = child_df.tail(6)
+            dip_found = False
+            for i in range(len(last_candles) - 1): # Check previous
+                r = last_candles['rsi'].iloc[i]
+                if support_low <= r <= support_high:
+                    dip_found = True
+                    break
+            
+            # Also check if current is in zone
+            if support_low <= current_rsi <= support_high:
+                dip_found = True
+            
+            if dip_found:
+                if current_close > current_open: # Green Confirmation
+                    return True, "LONG Setup Found", child_df.iloc[-1]
+
+        # 2. SHORT SETUP
+        if mode == "SHORT":
+            # Logic: Rally > 60 (Lookback far) THEN Cross Below 60
+            # Check last ~50 candles for a peak > 60
+            last_candles = child_df.tail(50)
+            peak_found = False
+            if last_candles['rsi'].max() > resist_low:
+                peak_found = True
+            
+            if peak_found:
+                # Trigger: Current RSI is < 60 (Crossed back down)
+                if current_rsi < resist_low:
+                     if current_close < current_open: # Red Confirmation
+                         return True, "SHORT Setup Found", child_df.iloc[-1]
+
+        return False, "No Child Setup", None
+
+    def check_early_warning(self, child_df, parent_df):
+        """
+        Checks for Early Warning / Approaching Zone.
+        Context based on 15M RSI (Parent 2).
+        15M > 60 -> Alert if Child touches 40.
+        15M < 40 -> Alert if Child touches 60.
+        """
+        if child_df is None or parent_df is None:
+            return False, None
+
+        current_rsi = child_df['rsi'].iloc[-1]
+        parent_rsi = parent_df['rsi'].iloc[-1]
+
+        if parent_rsi > 60:
+            # Long Context
+            if current_rsi <= 42:
+                return True, f"⚠️ **Watch Alert**: RSI {current_rsi:.2f} near 40 (Support) | 15M Bullish ({parent_rsi:.2f})"
+        
+        if parent_rsi < 40:
+            # Short Context
+            if current_rsi >= 58:
+                return True, f"⚠️ **Watch Alert**: RSI {current_rsi:.2f} near 60 (Resistance) | 15M Bearish ({parent_rsi:.2f})"
+            
+        return False, None
 
     def check_exit_condition(self, child_df, parent_df):
         """
