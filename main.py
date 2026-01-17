@@ -109,6 +109,26 @@ def main():
                 threshold_short=config.RSI_PARENT_SHORT_THRESHOLD
             )
 
+            # --- Parent Trend Alert ---
+            if parents_ok and mode:
+                # Key to track this specific alert: Symbol + Strat + Mode
+                trend_key = f"{symbol}_{strat_name}_{mode}_TREND"
+                last_trend_alert = bot_state.get("alerts", {}).get(trend_key, 0)
+                
+                # Alert if cooldown passed (e.g., 60 minutes) to avoid spam
+                if time.time() - last_trend_alert > 3600:
+                    trend_msg = (f"🌊 **TREND CONFIRMED** ({strat_name})\n"
+                                 f"Symbol: {symbol}\n"
+                                 f"Mode: {mode}\n"
+                                 f"P1 RSI: {p1_rsi:.2f}\n"
+                                 f"P2 RSI: {p2_rsi:.2f}\n"
+                                 f"Time: {datetime.now().strftime('%H:%M')}")
+                    
+                    notifier_obj.send_alert(trend_msg)
+                    
+                    if "alerts" not in bot_state: bot_state["alerts"] = {}
+                    bot_state["alerts"][trend_key] = time.time()
+
             # Warnings & Exits
             warning_triggered, warning_msg = strategy.check_early_warning(child, p2)
             if warning_triggered:
