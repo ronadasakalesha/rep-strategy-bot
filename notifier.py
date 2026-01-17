@@ -3,9 +3,9 @@ from logzero import logger
 import config
 
 class TelegramNotifier:
-    def __init__(self):
-        self.bot_token = config.TELEGRAM_BOT_TOKEN
-        self.chat_id = config.TELEGRAM_CHAT_ID
+    def __init__(self, token, chat_id):
+        self.bot_token = token
+        self.chat_id = chat_id
 
     def send_alert(self, message):
         if not self.bot_token or not self.chat_id or "your_" in self.bot_token:

@@ -21,15 +21,17 @@ def main():
     # 2. Initialize Strategy
     strategy = REPStrategy(rsi_period=config.RSI_PERIOD)
     
-    # 3. Initialize Notifier
-    notifier = TelegramNotifier()
+    # 3. Initialize Notifiers
+    notifier_eq = TelegramNotifier(config.TELEGRAM_BOT_TOKEN_EQUITY, config.TELEGRAM_CHAT_ID_EQUITY)
+    notifier_crypto = TelegramNotifier(config.TELEGRAM_BOT_TOKEN_CRYPTO, config.TELEGRAM_CHAT_ID_CRYPTO)
     
     # 4. Initialize Delta Helper
     from delta_api_helper import DeltaApiHelper
     delta_helper = DeltaApiHelper(config.DELTA_API_KEY, config.DELTA_API_SECRET)
 
     try:
-        notifier.send_alert("🚀 REP Strategy Bot Started (Equity + Crypto)")
+        notifier_eq.send_alert("🚀 REP Strategy Bot Started - Equity Module Active")
+        notifier_crypto.send_alert("🚀 REP Strategy Bot Started - Crypto Module Active")
     except Exception as e:
         logger.error(f"Startup Alert Failed: {e}")
 
@@ -66,7 +68,7 @@ def main():
 
     bot_state = {"last_angel_status": None}
 
-    def process_symbol(symbol, identifier, exchange, helper_obj):
+    def process_symbol(symbol, identifier, exchange, helper_obj, notifier_obj):
         """
         Common logic to process a symbol.
         identifier: 'token' for Angel, 'symbol' for Delta
@@ -114,7 +116,7 @@ def main():
                 warn_key = f"{symbol}_WARN"
                 last_warn = bot_state.get("alerts", {}).get(warn_key, 0)
                 if time.time() - last_warn > 900:
-                    notifier.send_alert(f"{warning_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
+                    notifier_obj.send_alert(f"{warning_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
                     if "alerts" not in bot_state: bot_state["alerts"] = {}
                     bot_state["alerts"][warn_key] = time.time()
 
@@ -123,7 +125,7 @@ def main():
                 exit_key = f"{symbol}_EXIT"
                 last_exit = bot_state.get("alerts", {}).get(exit_key, 0)
                 if time.time() - last_exit > 900:
-                    notifier.send_alert(f"{exit_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
+                    notifier_obj.send_alert(f"{exit_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
                     if "alerts" not in bot_state: bot_state["alerts"] = {}
                     bot_state["alerts"][exit_key] = time.time()
 
@@ -147,7 +149,7 @@ def main():
                            f"RSI(5m): {rsi_5m:.2f} | 15m: {p2_rsi:.2f} | 1h: {p1_rsi:.2f}\n"
                            f"Time: {datetime.now().strftime('%H:%M:%S')}")
                     logger.info(f"SIGNAL: {symbol} {mode}")
-                    notifier.send_alert(msg)
+                    notifier_obj.send_alert(msg)
 
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
@@ -159,18 +161,18 @@ def main():
         # --- 1. Process Angel One (Equity based on Market Hours) ---
         angel_open = is_angel_market_open()
         
-        # Alert Status Change
+        # Alert Status Change - EQUITY
         if bot_state["last_angel_status"] is not None:
              if angel_open and not bot_state["last_angel_status"]:
-                 notifier.send_alert("🟢 **Equity Market Open**")
+                 notifier_eq.send_alert("🟢 **Equity Market Open**")
              elif not angel_open and bot_state["last_angel_status"]:
-                 notifier.send_alert("🔴 **Equity Market Closed**")
+                 notifier_eq.send_alert("🔴 **Equity Market Closed**")
         bot_state["last_angel_status"] = angel_open
 
         if angel_open:
             logger.info(f"Scanning {len(config.SYMBOLS)} Angel Symbols...")
             for item in config.SYMBOLS:
-                process_symbol(item['symbol'], item['token'], item['exchange'], helper)
+                process_symbol(item['symbol'], item['token'], item['exchange'], helper, notifier_eq)
         else:
             logger.info("Equity Market Closed. Skipping Angel symbols.")
 
@@ -179,7 +181,7 @@ def main():
             logger.info(f"Scanning {len(config.CRYPTO_SYMBOLS)} Crypto Symbols...")
             for sym in config.CRYPTO_SYMBOLS:
                 # For Delta, identifier is same as symbol
-                process_symbol(sym, sym, "DELTA", delta_helper)
+                process_symbol(sym, sym, "DELTA", delta_helper, notifier_crypto)
 
         logger.info("Scan Cycle Complete.")
 

@@ -9,9 +9,13 @@ CLIENT_ID = os.getenv("ANGEL_CLIENT_ID")
 PASSWORD = os.getenv("ANGEL_PASSWORD")
 TOTP_KEY = os.getenv("ANGEL_TOTP_KEY")
 
-# Telegram Credentials
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Telegram Credentials - EQUITY (NIFTY)
+TELEGRAM_BOT_TOKEN_EQUITY = os.getenv("TELEGRAM_BOT_TOKEN_EQUITY")
+TELEGRAM_CHAT_ID_EQUITY = os.getenv("TELEGRAM_CHAT_ID_EQUITY")
+
+# Telegram Credentials - CRYPTO (BTC/ETH)
+TELEGRAM_BOT_TOKEN_CRYPTO = os.getenv("TELEGRAM_BOT_TOKEN_CRYPTO")
+TELEGRAM_CHAT_ID_CRYPTO = os.getenv("TELEGRAM_CHAT_ID_CRYPTO")
 
 # Delta Exchange Credentials (Optional if public)
 DELTA_API_KEY = os.getenv("DELTA_API_KEY") # Not strictly needed for public candles
