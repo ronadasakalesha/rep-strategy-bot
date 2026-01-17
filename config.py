@@ -13,6 +13,13 @@ TOTP_KEY = os.getenv("ANGEL_TOTP_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Delta Exchange Credentials (Optional if public)
+DELTA_API_KEY = os.getenv("DELTA_API_KEY") # Not strictly needed for public candles
+DELTA_API_SECRET = os.getenv("DELTA_API_SECRET")
+
+# Crypto Symbols
+CRYPTO_SYMBOLS = ["BTCUSD", "ETHUSD"]
+
 # Strategy Parameters
 RSI_PERIOD = 14
 RSI_PARENT_THRESHOLD = 60  # Minimum RSI for Parent timeframes (LONG)

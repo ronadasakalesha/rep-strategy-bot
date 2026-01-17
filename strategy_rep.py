@@ -17,13 +17,14 @@ class REPStrategy:
         Checks parent timeframes.
         Logic: 
         - Parent 1 (1H): STRICT. Current RSI must be > threshold_long or < threshold_short.
-        - Parent 2 (15M): RECENT. Look back 'lookback' candles.
+        - Parent 2 (15M): STRICT. Current RSI must be > threshold_long or < threshold_short.
+        (Both must satisfy the condition currently)
         Returns: (bool, str, mode)
         """
         if parent1_df is None or parent2_df is None:
             return False, "Data Missing", None
 
-        # 1. Check Parent 1 (1H) - STRICT (Current Candle)
+        # 1. Check Parent 1 (1H)
         p1_rsi = parent1_df['rsi'].iloc[-1]
         p1_mode = "NEUTRAL"
         if p1_rsi > threshold_long:
@@ -34,40 +35,32 @@ class REPStrategy:
         if p1_mode == "NEUTRAL":
              return False, f"Parent 1 (1H) Neutral (RSI: {p1_rsi:.2f})", None
 
-        # 2. Check Parent 2 (15M) - RELAXED (Recent Lookback)
-        # Helper to find trend in recent history
-        def get_trend_recent(df, t_long, t_short, lb):
-            subset = df.tail(lb)
-            for i in range(len(subset) - 1, -1, -1):
-                rsi = subset['rsi'].iloc[i]
-                if rsi > t_long:
-                    return "LONG"
-                if rsi < t_short:
-                    return "SHORT"
-            return "NEUTRAL"
+        # 2. Check Parent 2 (15M) - STRICT
+        p2_rsi = parent2_df['rsi'].iloc[-1]
+        p2_mode = "NEUTRAL"
+        if p2_rsi > threshold_long:
+            p2_mode = "LONG"
+        elif p2_rsi < threshold_short:
+            p2_mode = "SHORT"
 
-        p2_mode = get_trend_recent(parent2_df, threshold_long, threshold_short, lookback)
-
-        # 3. Validation: Both must agree
+        # 3. Validation: Both must agree strictly
         if p1_mode == "LONG" and p2_mode == "LONG":
-            return True, f"Parents Bullish (P1 Strict, P2 Recent)", "LONG"
+            return True, f"Parents Bullish (P1: {p1_rsi:.2f}, P2: {p2_rsi:.2f})", "LONG"
         
         if p1_mode == "SHORT" and p2_mode == "SHORT":
-            return True, f"Parents Bearish (P1 Strict, P2 Recent)", "SHORT"
+            return True, f"Parents Bearish (P1: {p1_rsi:.2f}, P2: {p2_rsi:.2f})", "SHORT"
 
         return False, f"Parents Mismatch (P1:{p1_mode}, P2:{p2_mode})", None
 
     def check_child_condition(self, child_df, mode, support_low=38, support_high=40, resist_low=60, resist_high=62):
         """
         Checks 5M Entry Triggers based on Mode.
-        LONG: RSI Dip 38-40 + Green Candle
-        SHORT: RSI Rally > 60 + Cross Below 60 + Red Candle
+        LONG: RSI Dip into 38-40 (Lookback) + Current RSI > 40
+        SHORT: RSI Rally into 60-62 (Lookback) + Current RSI < 60
         """
         if child_df is None or mode is None:
             return False, "Data Missing or No Mode", None
         
-        current_close = child_df['close'].iloc[-1]
-        current_open = child_df['open'].iloc[-1]
         current_rsi = child_df['rsi'].iloc[-1]
 
         # 1. LONG SETUP
@@ -75,34 +68,50 @@ class REPStrategy:
             # Logic: Check last ~6 candles for a dip into 38-40
             last_candles = child_df.tail(6)
             dip_found = False
-            for i in range(len(last_candles) - 1): # Check previous
+            for i in range(len(last_candles) - 1): # Check previous candles
                 r = last_candles['rsi'].iloc[i]
                 if support_low <= r <= support_high:
                     dip_found = True
                     break
             
-            # Also check if current is in zone
-            if support_low <= current_rsi <= support_high:
-                dip_found = True
-            
+            # Trigger: Current RSI > 40
+            # We assume "Price closes higher than rsi 40" means RSI value > 40
             if dip_found:
-                if current_close > current_open: # Green Confirmation
-                    return True, "LONG Setup Found", child_df.iloc[-1]
+                if current_rsi > support_high: # Crossed above 40
+                    return True, f"LONG Setup Found (RSI {current_rsi:.2f} > {support_high})", child_df.iloc[-1]
+                else:
+                     return False, f"Waiting for Trigger (RSI {current_rsi:.2f} <= {support_high})", None
 
         # 2. SHORT SETUP
         if mode == "SHORT":
-            # Logic: Rally > 60 (Lookback far) THEN Cross Below 60
-            # Check last ~50 candles for a peak > 60
-            last_candles = child_df.tail(50)
-            peak_found = False
-            if last_candles['rsi'].max() > resist_low:
-                peak_found = True
+            # Logic: Rally > 60 (Lookback far) or into 60-62 zone
+            # The original code checked for a peak > 60. Let's align with the "Dip into zone" logic, 
+            # so "Rally into 60-62".
             
+            last_candles = child_df.tail(50) # Keep wider lookback for Short setup finding? 
+            # Let's restrict to similar local lookback for "Zone Touch" if intended, but Short usually looks for broader rallies.
+            # Sticking to the previous logic of "finding a peak" but refining the trigger.
+            
+            # Actually, user said "Trend Condition ... both satisfy". 
+            # For Child, let's keep the zone check specific.
+            # Using 6 candles lookback for consistency with Long side 'Dip'.
+            
+            last_candles_short = child_df.tail(10)
+            peak_found = False
+            for i in range(len(last_candles_short) - 1):
+                r = last_candles_short['rsi'].iloc[i]
+                if resist_low <= r <= resist_high: # Touched 60-62
+                    peak_found = True
+                # Or if it went higher than 62? Usually "Rally above 60". 
+                if r >= resist_low:
+                    peak_found = True
+
             if peak_found:
-                # Trigger: Current RSI is < 60 (Crossed back down)
+                # Trigger: Current RSI < 60
                 if current_rsi < resist_low:
-                     if current_close < current_open: # Red Confirmation
-                         return True, "SHORT Setup Found", child_df.iloc[-1]
+                     return True, f"SHORT Setup Found (RSI {current_rsi:.2f} < {resist_low})", child_df.iloc[-1]
+                else:
+                     return False, f"Waiting for Trigger (RSI {current_rsi:.2f} >= {resist_low})", None
 
         return False, "No Child Setup", None
 
