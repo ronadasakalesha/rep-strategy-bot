@@ -33,11 +33,21 @@ RSI_CHILD_SUPPORT_HIGH = 40
 RSI_CHILD_RESISTANCE_LOW = 60
 RSI_CHILD_RESISTANCE_HIGH = 62
 
-# Timeframes (Angel One format)
-# "ONE_DAY", "ONE_HOUR", "FIFTEEN_MINUTE", "FIVE_MINUTE"
-TF_PARENT_1 = "ONE_HOUR"
-TF_PARENT_2 = "FIFTEEN_MINUTE"
-TF_CHILD = "FIVE_MINUTE"
+# Timeframe Sets
+STRATEGY_SETS = [
+    {
+        "name": "INTRADAY",
+        "p1": "ONE_HOUR",
+        "p2": "FIFTEEN_MINUTE",
+        "child": "FIVE_MINUTE"
+    },
+    {
+        "name": "SWING",
+        "p1": "ONE_DAY",
+        "p2": "ONE_HOUR",
+        "child": "FIFTEEN_MINUTE"
+    }
+]
 
 # Symbols will be loaded dynamically in main.py
 SYMBOLS = []

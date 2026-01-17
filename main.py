@@ -68,18 +68,17 @@ def main():
 
     bot_state = {"last_angel_status": None}
 
-    def process_symbol(symbol, identifier, exchange, helper_obj, notifier_obj):
+    def process_symbol(symbol, identifier, exchange, helper_obj, notifier_obj, timeframes):
         """
-        Common logic to process a symbol.
-        identifier: 'token' for Angel, 'symbol' for Delta
-        exchange: 'NSE' for Angel, 'DELTA' for Delta
+        Common logic to process a symbol for a specific timeframe set.
         """
+        strat_name = timeframes['name']
         try:
             # Rate Limit Sleep
             time.sleep(0.5)
 
-            # 1. Parent 1 (1H)
-            p1 = helper_obj.get_historical_data(identifier, exchange, config.TF_PARENT_1)
+            # 1. Parent 1
+            p1 = helper_obj.get_historical_data(identifier, exchange, timeframes['p1'])
             if p1 is None: return
             p1 = strategy.calculate_rsi(p1)
             p1_rsi = p1['rsi'].iloc[-1]
@@ -88,8 +87,8 @@ def main():
             if not (p1_rsi >= config.RSI_PARENT_THRESHOLD or p1_rsi <= config.RSI_PARENT_SHORT_THRESHOLD):
                 return
 
-            # 2. Parent 2 (15M)
-            p2 = helper_obj.get_historical_data(identifier, exchange, config.TF_PARENT_2)
+            # 2. Parent 2
+            p2 = helper_obj.get_historical_data(identifier, exchange, timeframes['p2'])
             if p2 is None: return
             p2 = strategy.calculate_rsi(p2)
             p2_rsi = p2['rsi'].iloc[-1]
@@ -98,8 +97,8 @@ def main():
             if p1_rsi >= config.RSI_PARENT_THRESHOLD and p2_rsi < config.RSI_PARENT_THRESHOLD: return
             if p1_rsi <= config.RSI_PARENT_SHORT_THRESHOLD and p2_rsi > config.RSI_PARENT_SHORT_THRESHOLD: return
 
-            # 3. Child (5M)
-            child = helper_obj.get_historical_data(identifier, exchange, config.TF_CHILD)
+            # 3. Child (Entry)
+            child = helper_obj.get_historical_data(identifier, exchange, timeframes['child'])
             if child is None: return
             child = strategy.calculate_rsi(child)
 
@@ -113,19 +112,19 @@ def main():
             # Warnings & Exits
             warning_triggered, warning_msg = strategy.check_early_warning(child, p2)
             if warning_triggered:
-                warn_key = f"{symbol}_WARN"
+                warn_key = f"{symbol}_{strat_name}_WARN"
                 last_warn = bot_state.get("alerts", {}).get(warn_key, 0)
                 if time.time() - last_warn > 900:
-                    notifier_obj.send_alert(f"{warning_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
+                    notifier_obj.send_alert(f"{warning_msg}\nType: {strat_name}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
                     if "alerts" not in bot_state: bot_state["alerts"] = {}
                     bot_state["alerts"][warn_key] = time.time()
 
             exit_triggered, exit_msg = strategy.check_exit_condition(child, p2)
             if exit_triggered:
-                exit_key = f"{symbol}_EXIT"
+                exit_key = f"{symbol}_{strat_name}_EXIT"
                 last_exit = bot_state.get("alerts", {}).get(exit_key, 0)
                 if time.time() - last_exit > 900:
-                    notifier_obj.send_alert(f"{exit_msg}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
+                    notifier_obj.send_alert(f"{exit_msg}\nType: {strat_name}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M')}")
                     if "alerts" not in bot_state: bot_state["alerts"] = {}
                     bot_state["alerts"][exit_key] = time.time()
 
@@ -141,18 +140,20 @@ def main():
                 )
                 
                 if child_ok:
-                    rsi_5m = child['rsi'].iloc[-1]
+                    rsi_child_val = child['rsi'].iloc[-1]
                     trigger_price = confirmation_candle['close']
-                    msg = (f"🚀 **REP {mode} SIGNAL**\n"
-                           f"Symbol: {symbol} ({exchange})\n"
+                    msg = (f"🚀 **REP {mode} SIGNAL** ({strat_name})\n"
+                           f"Symbol: {symbol}\n"
                            f"Price: {trigger_price}\n"
-                           f"RSI(5m): {rsi_5m:.2f} | 15m: {p2_rsi:.2f} | 1h: {p1_rsi:.2f}\n"
+                           f"Entry RSI: {rsi_child_val:.2f}\n"
+                           f"P1 RSI: {p1_rsi:.2f}\n"
+                           f"P2 RSI: {p2_rsi:.2f}\n"
                            f"Time: {datetime.now().strftime('%H:%M:%S')}")
-                    logger.info(f"SIGNAL: {symbol} {mode}")
+                    logger.info(f"SIGNAL: {symbol} {mode} [{strat_name}]")
                     notifier_obj.send_alert(msg)
 
         except Exception as e:
-            logger.error(f"Error processing {symbol}: {e}")
+            logger.error(f"Error processing {symbol} ({strat_name}): {e}")
 
 
     def run_scan():
@@ -172,7 +173,9 @@ def main():
         if angel_open:
             logger.info(f"Scanning {len(config.SYMBOLS)} Angel Symbols...")
             for item in config.SYMBOLS:
-                process_symbol(item['symbol'], item['token'], item['exchange'], helper, notifier_eq)
+                # Iterate through all configured strategy sets
+                for strat_set in config.STRATEGY_SETS:
+                    process_symbol(item['symbol'], item['token'], item['exchange'], helper, notifier_eq, strat_set)
         else:
             logger.info("Equity Market Closed. Skipping Angel symbols.")
 
@@ -180,8 +183,9 @@ def main():
         if config.CRYPTO_SYMBOLS:
             logger.info(f"Scanning {len(config.CRYPTO_SYMBOLS)} Crypto Symbols...")
             for sym in config.CRYPTO_SYMBOLS:
-                # For Delta, identifier is same as symbol
-                process_symbol(sym, sym, "DELTA", delta_helper, notifier_crypto)
+                # Iterate through all configured strategy sets
+                for strat_set in config.STRATEGY_SETS:
+                    process_symbol(sym, sym, "DELTA", delta_helper, notifier_crypto, strat_set)
 
         logger.info("Scan Cycle Complete.")
 
