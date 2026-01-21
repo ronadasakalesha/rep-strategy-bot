@@ -52,68 +52,84 @@ class REPStrategy:
 
         return False, f"Parents Mismatch (P1:{p1_mode}, P2:{p2_mode})", None
 
-    def check_child_condition(self, child_df, mode, support_low=38, support_high=40, resist_low=60, resist_high=62):
+    def _check_strict_zone_touch(self, child_df, mode, lookback=10, support_low=38, support_high=40, resist_low=60, resist_high=62):
         """
-        Checks 5M Entry Triggers based on Mode.
-        LONG: RSI Dip into 38-40 (Lookback) + Current RSI > 40
-        SHORT: RSI Rally into 60-62 (Lookback) + Current RSI < 60
+        OPTION 1: Strict Zone Touch.
+        Checks if RSI touched a specific zone within the last 'lookback' candles and is now reversing.
+        """
+        current_rsi = child_df['rsi'].iloc[-1]
+        # Check history excluding current candle
+        recent_history = child_df['rsi'].iloc[-lookback-1 : -1]
+
+        if mode == "LONG":
+            # Check if ANY candle in lookback touched the zone
+            touched_support = ((recent_history >= support_low) & (recent_history <= support_high)).any()
+            if touched_support:
+                # Trigger: Closed back above upper bound
+                if current_rsi > support_high:
+                    return True, f"LONG (Strict Zone): Touched {support_low}-{support_high}, Now {current_rsi:.2f}", child_df.iloc[-1]
+                else:
+                    return False, f"Waiting Trigger (Strict): {current_rsi:.2f} <= {support_high}", None
+        
+        elif mode == "SHORT":
+            # Check if ANY candle in lookback touched the zone
+            touched_resistance = ((recent_history >= resist_low) & (recent_history <= resist_high)).any()
+            if touched_resistance:
+                # Trigger: Closed back below lower bound
+                if current_rsi < resist_low:
+                     return True, f"SHORT (Strict Zone): Touched {resist_low}-{resist_high}, Now {current_rsi:.2f}", child_df.iloc[-1]
+                else:
+                    return False, f"Waiting Trigger (Strict): {current_rsi:.2f} >= {resist_low}", None
+        
+        return False, "No Strict Setup", None
+
+    def _check_swing_pivot(self, child_df, mode, max_rsi_for_support=55, min_rsi_for_resistance=45):
+        """
+        OPTION 2: Dynamic Swing Pivot.
+        Detects V-Shape (Buy) or A-Shape (Sell) reversal without needing strict zone touch.
+        """
+        if len(child_df) < 3: return False, "Not Enough Data", None
+
+        rsi_now = child_df['rsi'].iloc[-1]
+        rsi_mid = child_df['rsi'].iloc[-2]
+        rsi_left = child_df['rsi'].iloc[-3]
+
+        if mode == "LONG":
+            # 1. V-Shape: Left > Low AND Now > Low
+            is_pivot_low = (rsi_left > rsi_mid) and (rsi_now > rsi_mid)
+            # 2. Level: Low was "low enough" (e.g. < 55)
+            is_low_enough = rsi_mid < max_rsi_for_support
+            
+            if is_pivot_low and is_low_enough:
+                 return True, f"LONG (Swing Pivot): Supported at {rsi_mid:.2f} (Pivot < {max_rsi_for_support})", child_df.iloc[-1]
+                 
+        elif mode == "SHORT":
+            # 1. A-Shape: Left < High AND Now < High
+            is_pivot_high = (rsi_left < rsi_mid) and (rsi_now < rsi_mid)
+            # 2. Level: High was "high enough" (e.g. > 45)
+            is_high_enough = rsi_mid > min_rsi_for_resistance
+            
+            if is_pivot_high and is_high_enough:
+                return True, f"SHORT (Swing Pivot): Resisted at {rsi_mid:.2f} (Pivot > {min_rsi_for_resistance})", child_df.iloc[-1]
+
+        return False, "No Swing Setup", None
+
+    def check_child_condition(self, child_df, mode):
+        """
+        Checks 5M Entry Triggers.
+        Currently ACTIVE: Option 2 (Swing Pivot).
         """
         if child_df is None or mode is None:
-            return False, "Data Missing or No Mode", None
+            return False, "Data Missing", None
+
+        # --- OPTION 1: STRICT ZONE (Inactive for now) ---
+        # To enable, uncomment below and return its result
+        # is_setup, msg, candle = self._check_strict_zone_touch(child_df, mode)
+        # if is_setup: return True, msg, candle
         
-        current_rsi = child_df['rsi'].iloc[-1]
-
-        # 1. LONG SETUP
-        if mode == "LONG":
-            # Logic: Check last ~6 candles for a dip into 38-40
-            last_candles = child_df.tail(6)
-            dip_found = False
-            for i in range(len(last_candles) - 1): # Check previous candles
-                r = last_candles['rsi'].iloc[i]
-                if support_low <= r <= support_high:
-                    dip_found = True
-                    break
-            
-            # Trigger: Current RSI > 40
-            # We assume "Price closes higher than rsi 40" means RSI value > 40
-            if dip_found:
-                if current_rsi > support_high: # Crossed above 40
-                    return True, f"LONG Setup Found (RSI {current_rsi:.2f} > {support_high})", child_df.iloc[-1]
-                else:
-                     return False, f"Waiting for Trigger (RSI {current_rsi:.2f} <= {support_high})", None
-
-        # 2. SHORT SETUP
-        if mode == "SHORT":
-            # Logic: Rally > 60 (Lookback far) or into 60-62 zone
-            # The original code checked for a peak > 60. Let's align with the "Dip into zone" logic, 
-            # so "Rally into 60-62".
-            
-            last_candles = child_df.tail(50) # Keep wider lookback for Short setup finding? 
-            # Let's restrict to similar local lookback for "Zone Touch" if intended, but Short usually looks for broader rallies.
-            # Sticking to the previous logic of "finding a peak" but refining the trigger.
-            
-            # Actually, user said "Trend Condition ... both satisfy". 
-            # For Child, let's keep the zone check specific.
-            # Using 6 candles lookback for consistency with Long side 'Dip'.
-            
-            last_candles_short = child_df.tail(10)
-            peak_found = False
-            for i in range(len(last_candles_short) - 1):
-                r = last_candles_short['rsi'].iloc[i]
-                if resist_low <= r <= resist_high: # Touched 60-62
-                    peak_found = True
-                # Or if it went higher than 62? Usually "Rally above 60". 
-                if r >= resist_low:
-                    peak_found = True
-
-            if peak_found:
-                # Trigger: Current RSI < 60
-                if current_rsi < resist_low:
-                     return True, f"SHORT Setup Found (RSI {current_rsi:.2f} < {resist_low})", child_df.iloc[-1]
-                else:
-                     return False, f"Waiting for Trigger (RSI {current_rsi:.2f} >= {resist_low})", None
-
-        return False, "No Child Setup", None
+        # --- OPTION 2: SWING PIVOT (Active) ---
+        # Allows entering on shallow pullbacks in strong trends
+        return self._check_swing_pivot(child_df, mode)
 
     def check_early_warning(self, child_df, parent_df):
         """
