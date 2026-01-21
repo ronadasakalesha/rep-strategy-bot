@@ -81,6 +81,7 @@ def main():
             p1 = helper_obj.get_historical_data(identifier, exchange, timeframes['p1'])
             if p1 is None: return
             p1 = strategy.calculate_rsi(p1)
+            if p1 is None: return
             p1_rsi = p1['rsi'].iloc[-1]
 
             # Filter: Must be trending (>60 or <40)
@@ -91,6 +92,7 @@ def main():
             p2 = helper_obj.get_historical_data(identifier, exchange, timeframes['p2'])
             if p2 is None: return
             p2 = strategy.calculate_rsi(p2)
+            if p2 is None: return
             p2_rsi = p2['rsi'].iloc[-1]
 
             # Consistency Check
@@ -101,6 +103,7 @@ def main():
             child = helper_obj.get_historical_data(identifier, exchange, timeframes['child'])
             if child is None: return
             child = strategy.calculate_rsi(child)
+            if child is None: return
 
             # 4. Strategy Check
             parents_ok, parents_msg, mode = strategy.check_parent_conditions(
